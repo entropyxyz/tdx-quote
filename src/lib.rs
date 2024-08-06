@@ -1,10 +1,14 @@
 use nom::{
     bytes::complete::take,
-    combinator::{map, map_res},
+    combinator::map,
     number::complete::{le_u16, le_u32},
     sequence::tuple,
     IResult,
 };
+
+mod take;
+
+use take::{take16, take2, take20, take4, take48, take64, take8};
 
 #[derive(Debug)]
 pub enum TEEType {
@@ -12,13 +16,22 @@ pub enum TEEType {
     TDX = 0x00000081,
 }
 
+// TODO impl From<[u8; 4]> for TEEType
+
 #[derive(Debug)]
 pub struct QuoteHeader {
+    /// Quote version (4 or 5)
     pub version: u16,
+    /// Type of the Attestation Key used by the Quoting Enclave. Supported values:
+    /// 2 ECDSA-256-with-P-256 curve
+    /// 3 ECDSA-384-with-P-384 curve (currently not supported)
     pub attestation_key_type: u16,
     pub tee_type: TEEType,
+    /// Currently unused
     pub reserved1: [u8; 2],
+    /// Currently unused
     pub reserved2: [u8; 2],
+    /// UUID for the quoting enclave vendor
     pub qe_vendor_id: [u8; 16], // can use Uuid
     pub user_data: [u8; 20],
 }
@@ -40,6 +53,7 @@ pub enum TDQuoteBody {
     },
 }
 
+/// The main part of the body v4 (v5 also includes all these fields)
 #[derive(Debug)]
 pub struct TDQuoteBodyV4 {
     pub tee_tcb_svn: [u8; 16],
@@ -48,14 +62,17 @@ pub struct TDQuoteBodyV4 {
     pub seamattributes: [u8; 8],
     pub tdattributes: [u8; 8],
     pub xfam: [u8; 8],
+    /// Build-time measurement
     pub mrtd: [u8; 48],
     pub mrconfigid: [u8; 48],
     pub mrowner: [u8; 48],
     pub mrownerconfig: [u8; 48],
+    /// Runtime extendable measurement register
     pub rtmr0: [u8; 48],
     pub rtmr1: [u8; 48],
     pub rtmr2: [u8; 48],
     pub rtmr3: [u8; 48],
+    /// User defined input data
     pub reportdata: [u8; 64],
 }
 
@@ -67,21 +84,10 @@ pub struct TDQuoteBodyV5Inner {
     pub mrservicetd: [u8; 48],
 }
 
-fn take2(input: &[u8]) -> IResult<&[u8], [u8; 2]> {
-    map_res(take(2u8), |i: &[u8]| i.try_into())(input)
-}
-
+/// Parser for a quote header
 fn quote_header_parser(input: &[u8]) -> IResult<&[u8], QuoteHeader> {
     map(
-        tuple((
-            le_u16,
-            le_u16,
-            take(4u8),
-            take2,
-            take2,
-            take(16u8),
-            take(20u8),
-        )),
+        tuple((le_u16, le_u16, take4, take2, take2, take16, take20)),
         |(
             version,
             attestation_key_type,
@@ -93,37 +99,55 @@ fn quote_header_parser(input: &[u8]) -> IResult<&[u8], QuoteHeader> {
         )| QuoteHeader {
             version,
             attestation_key_type,
-            tee_type: TEEType::TDX,
+            tee_type: TEEType::TDX, // TODO
             reserved1,
             reserved2,
-            qe_vendor_id: [0u8; 16], // can use Uuid
-            user_data: [0u8; 20],
+            qe_vendor_id, // can use Uuid
+            user_data,
         },
     )(input)
 }
 
 fn td_quote_body_v4_parser(input: &[u8]) -> IResult<&[u8], TDQuoteBodyV4> {
-    // TODO
-    Ok((
-        input,
-        TDQuoteBodyV4 {
-            tee_tcb_svn: [0u8; 16],
-            mrseam: [0u8; 48],
-            mrsignerseam: [0u8; 48],
-            seamattributes: [0u8; 8],
-            tdattributes: [0u8; 8],
-            xfam: [0u8; 8],
-            mrtd: [0u8; 48],
-            mrconfigid: [0u8; 48],
-            mrowner: [0u8; 48],
-            mrownerconfig: [0u8; 48],
-            rtmr0: [0u8; 48],
-            rtmr1: [0u8; 48],
-            rtmr2: [0u8; 48],
-            rtmr3: [0u8; 48],
-            reportdata: [0u8; 64],
+    map(
+        tuple((
+            take16, take48, take48, take8, take8, take8, take48, take48, take48, take48, take48,
+            take48, take48, take48, take64,
+        )),
+        |(
+            tee_tcb_svn,
+            mrseam,
+            mrsignerseam,
+            seamattributes,
+            tdattributes,
+            xfam,
+            mrtd,
+            mrconfigid,
+            mrowner,
+            mrownerconfig,
+            rtmr0,
+            rtmr1,
+            rtmr2,
+            rtmr3,
+            reportdata,
+        )| TDQuoteBodyV4 {
+            tee_tcb_svn,
+            mrseam,
+            mrsignerseam,
+            seamattributes,
+            tdattributes,
+            xfam,
+            mrtd,
+            mrconfigid,
+            mrowner,
+            mrownerconfig,
+            rtmr0,
+            rtmr1,
+            rtmr2,
+            rtmr3,
+            reportdata,
         },
-    ))
+    )(input)
 }
 
 fn td_quote_body_v5_inner_parser(input: &[u8]) -> IResult<&[u8], TDQuoteBodyV5Inner> {

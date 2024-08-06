@@ -1,4 +1,4 @@
-Parses TDX quotes
+Parses TDX quotes (v4 and v5)
 
 Currently WIP
 
