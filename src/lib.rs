@@ -1,6 +1,7 @@
 #![no_std]
 
 extern crate alloc;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use nom::{
@@ -10,6 +11,7 @@ use nom::{
     sequence::tuple,
     IResult,
 };
+use p256::ecdsa::{Signature, VerifyingKey};
 
 mod take_n;
 
@@ -75,8 +77,8 @@ pub struct QuoteHeader {
 pub struct Quote {
     pub header: QuoteHeader,
     pub td_quote_body: TDQuoteBody,
-    pub signature: [u8; 64],
-    pub attestation_key: [u8; 64],
+    pub signature: Signature,
+    pub attestation_key: VerifyingKey,
     pub certification_data: CertificationData,
 }
 
@@ -276,9 +278,25 @@ fn td_body_parser(input: &[u8], version: u16) -> IResult<&[u8], TDQuoteBody> {
 pub fn quote_parser(input: &[u8]) -> IResult<&[u8], Quote> {
     let (input, header) = quote_header_parser(input)?;
     let (input, td_quote_body) = td_body_parser(input, header.version)?;
+
+    // Signature
     let (input, _signature_section_length) = le_i32(input)?;
-    let (input, signature) = take64(input)?;
-    let (input, attestation_key) = take64(input)?;
+    let (input, signature) = take(64u8)(input)?;
+    let signature = Signature::from_bytes(signature.into()).map_err(|_| {
+        nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
+    })?;
+
+    // Attestation key
+    let (input, attestation_key) = take(64u8)(input)?;
+    // TODO do this a better way
+    let mut pk_v = vec![04]; // 0x04 means uncompressed
+    let mut a_v = attestation_key.to_vec();
+    pk_v.append(&mut a_v);
+    let attestation_key = VerifyingKey::from_sec1_bytes(&pk_v).map_err(|_| {
+        nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
+    })?;
+
+    // Certification data
     let (input, certification_data_type) = le_i16(input)?;
     let (input, certification_dat_len) = le_i32(input)?;
     let certification_dat_len: usize = certification_dat_len.try_into().map_err(|_| {
