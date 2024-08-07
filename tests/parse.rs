@@ -1,5 +1,5 @@
 use std::io::Read;
-use tdx_quote::quote_parser;
+use tdx_quote::{quote_parser, QuoteParseError};
 
 #[test]
 fn test_parse() {
@@ -12,5 +12,5 @@ fn test_parse() {
 
     // Fails to verify signature if the input data changes
     input[49] += 1;
-    assert!(quote_parser(&input).is_err());
+    assert_eq!(quote_parser(&input), Err(QuoteParseError::Verification));
 }

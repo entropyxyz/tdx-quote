@@ -16,7 +16,7 @@ mod take_n;
 use take_n::{take16, take2, take20, take48, take64, take8};
 
 /// Type of TEE used
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum TEEType {
     SGX = 0x00000000,
     TDX = 0x00000081,
@@ -36,7 +36,7 @@ impl TryFrom<u32> for TEEType {
 
 /// Type of the Attestation Key used by the Quoting Enclave
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum AttestionKeyType {
     ECDSA256WithP256,
     ECDSA384WithP384, // Not yet supported by TDX
@@ -55,7 +55,7 @@ impl TryFrom<u16> for AttestionKeyType {
 }
 
 /// A TDX quote header
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct QuoteHeader {
     /// Quote version (4 or 5)
     pub version: u16,
@@ -71,7 +71,7 @@ pub struct QuoteHeader {
 }
 
 /// A TDX Quote
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct Quote {
     pub header: QuoteHeader,
     pub td_quote_body: TDQuoteBody,
@@ -100,7 +100,7 @@ impl Quote {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum TDQuoteBody {
     V4(TDQuoteBodyV4),
     V5 {
@@ -111,7 +111,7 @@ pub enum TDQuoteBody {
 }
 
 /// The main part of the body v4 (v5 also includes all these fields)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TDQuoteBodyV4 {
     pub tee_tcb_svn: [u8; 16],
     pub mrseam: [u8; 48],
@@ -134,7 +134,7 @@ pub struct TDQuoteBodyV4 {
 }
 
 /// A v5 quote body - which is the same as the v4 body but with 2 extra fields
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TDQuoteBodyV5Inner {
     pub td_quote_body_v4: TDQuoteBodyV4,
     pub tee_tcb_svn_2: [u8; 16],
@@ -143,7 +143,7 @@ pub struct TDQuoteBodyV5Inner {
 
 /// Data required to verify the QE Report Signature
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum CertificationData {
     PckIdPpidPlainCpusvnPcesvn(Vec<u8>),
     PckIdPpidRSA2048CpusvnPcesvn(Vec<u8>),
@@ -155,7 +155,7 @@ pub enum CertificationData {
 }
 
 impl CertificationData {
-    pub fn new(certification_data_type: i16, data: Vec<u8>) -> Result<Self, nom::Err<i16>> {
+    pub fn new(certification_data_type: i16, data: Vec<u8>) -> Result<Self, QuoteParseError> {
         match certification_data_type {
             1 => Ok(Self::PckIdPpidPlainCpusvnPcesvn(data)),
             2 => Ok(Self::PckIdPpidRSA2048CpusvnPcesvn(data)),
@@ -164,7 +164,7 @@ impl CertificationData {
             5 => Ok(Self::PckCertChain(data)),
             6 => Ok(Self::QeReportCertificationData(data)),
             7 => Ok(Self::PlatformManifest(data)),
-            _ => Err(nom::Err::Failure(certification_data_type)),
+            _ => Err(QuoteParseError::UnknownCertificationDataType),
         }
     }
 }
@@ -299,11 +299,7 @@ pub fn quote_parser(input: &[u8]) -> Result<Quote, QuoteParseError> {
     })?;
 
     // Verify signature
-    attestation_key
-        .verify(signed_data, &signature)
-        .map_err(|_| {
-            nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
-        })?;
+    attestation_key.verify(signed_data, &signature)?;
 
     // Certification data
     let (input, certification_data_type) = le_i16(input)?;
@@ -330,10 +326,17 @@ pub fn quote_parser(input: &[u8]) -> Result<Quote, QuoteParseError> {
 pub enum QuoteParseError {
     Parse,
     Verification,
+    UnknownCertificationDataType,
 }
 
 impl From<nom::Err<nom::error::Error<&[u8]>>> for QuoteParseError {
     fn from(_: nom::Err<nom::error::Error<&[u8]>>) -> QuoteParseError {
         QuoteParseError::Parse
+    }
+}
+
+impl From<p256::ecdsa::Error> for QuoteParseError {
+    fn from(_: p256::ecdsa::Error) -> QuoteParseError {
+        QuoteParseError::Verification
     }
 }
