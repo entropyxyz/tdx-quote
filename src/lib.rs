@@ -10,7 +10,7 @@ use nom::{
     sequence::tuple,
     IResult,
 };
-use p256::ecdsa::{Signature, VerifyingKey};
+use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 
 mod take_n;
 
@@ -275,7 +275,14 @@ fn td_body_parser(input: &[u8], version: u16) -> IResult<&[u8], TDQuoteBody> {
 
 /// Parse a TDX quote
 pub fn quote_parser(input: &[u8]) -> IResult<&[u8], Quote> {
+    let original_input = input;
     let (input, header) = quote_header_parser(input)?;
+    let body_length = match header.version {
+        4 => 584,
+        5 => 584 + 64,
+        _ => 0, // TODO
+    };
+    let signed_data = &original_input[..48 + body_length];
     let (input, td_quote_body) = td_body_parser(input, header.version)?;
 
     // Signature
@@ -291,6 +298,13 @@ pub fn quote_parser(input: &[u8]) -> IResult<&[u8], Quote> {
     let attestation_key = VerifyingKey::from_sec1_bytes(&attestation_key).map_err(|_| {
         nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
     })?;
+
+    // Verify signature
+    attestation_key
+        .verify(signed_data, &signature)
+        .map_err(|_| {
+            nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
+        })?;
 
     // Certification data
     let (input, certification_data_type) = le_i16(input)?;
