@@ -1,7 +1,6 @@
 #![no_std]
 
 extern crate alloc;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use nom::{
@@ -288,11 +287,8 @@ pub fn quote_parser(input: &[u8]) -> IResult<&[u8], Quote> {
 
     // Attestation key
     let (input, attestation_key) = take(64u8)(input)?;
-    // TODO do this a better way
-    let mut pk_v = vec![04]; // 0x04 means uncompressed
-    let mut a_v = attestation_key.to_vec();
-    pk_v.append(&mut a_v);
-    let attestation_key = VerifyingKey::from_sec1_bytes(&pk_v).map_err(|_| {
+    let attestation_key = [&[04], attestation_key].concat(); // 0x04 means uncompressed
+    let attestation_key = VerifyingKey::from_sec1_bytes(&attestation_key).map_err(|_| {
         nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
     })?;
 
