@@ -7,11 +7,6 @@ pub fn take2(input: &[u8]) -> IResult<&[u8], [u8; 2]> {
     map_res(take(2u8), |i: &[u8]| i.try_into())(input)
 }
 
-/// Parser for a [u8; 4]
-pub fn take4(input: &[u8]) -> IResult<&[u8], [u8; 4]> {
-    map_res(take(4u8), |i: &[u8]| i.try_into())(input)
-}
-
 /// Parser for a [u8; 8]
 pub fn take8(input: &[u8]) -> IResult<&[u8], [u8; 8]> {
     map_res(take(8u8), |i: &[u8]| i.try_into())(input)

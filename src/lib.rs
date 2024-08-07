@@ -1,6 +1,5 @@
 use nom::{
-    bytes::complete::take,
-    combinator::map,
+    combinator::{map, map_res},
     number::complete::{le_u16, le_u32},
     sequence::tuple,
     IResult,
@@ -8,7 +7,7 @@ use nom::{
 
 mod take;
 
-use take::{take16, take2, take20, take4, take48, take64, take8};
+use take::{take16, take2, take20, take48, take64, take8};
 
 #[derive(Debug)]
 pub enum TEEType {
@@ -16,7 +15,20 @@ pub enum TEEType {
     TDX = 0x00000081,
 }
 
-// TODO impl From<[u8; 4]> for TEEType
+impl TryFrom<u32> for TEEType {
+    type Error = nom::Err<u32>;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0x00000000 => Ok(TEEType::SGX),
+            0x00000081 => Ok(TEEType::TDX),
+            _ => Err(nom::Err::Failure(
+                value,
+                // nom::error::Error::new(value, nom::error::ErrorKind::Fail),
+            )),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct QuoteHeader {
@@ -86,8 +98,8 @@ pub struct TDQuoteBodyV5Inner {
 
 /// Parser for a quote header
 fn quote_header_parser(input: &[u8]) -> IResult<&[u8], QuoteHeader> {
-    map(
-        tuple((le_u16, le_u16, take4, take2, take2, take16, take20)),
+    map_res(
+        tuple((le_u16, le_u16, le_u32, take2, take2, take16, take20)),
         |(
             version,
             attestation_key_type,
@@ -96,14 +108,16 @@ fn quote_header_parser(input: &[u8]) -> IResult<&[u8], QuoteHeader> {
             reserved2,
             qe_vendor_id,
             user_data,
-        )| QuoteHeader {
-            version,
-            attestation_key_type,
-            tee_type: TEEType::TDX, // TODO
-            reserved1,
-            reserved2,
-            qe_vendor_id, // can use Uuid
-            user_data,
+        )| {
+            Ok::<QuoteHeader, nom::Err<u32>>(QuoteHeader {
+                version,
+                attestation_key_type,
+                tee_type: tee_type.try_into()?,
+                reserved1,
+                reserved2,
+                qe_vendor_id, // can use Uuid
+                user_data,
+            })
         },
     )(input)
 }
