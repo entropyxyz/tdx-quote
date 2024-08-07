@@ -1,5 +1,4 @@
 #![no_std]
-
 extern crate alloc;
 use alloc::vec::Vec;
 
@@ -274,7 +273,7 @@ fn td_body_parser(input: &[u8], version: u16) -> IResult<&[u8], TDQuoteBody> {
 }
 
 /// Parse a TDX quote
-pub fn quote_parser(input: &[u8]) -> IResult<&[u8], Quote> {
+pub fn quote_parser(input: &[u8]) -> Result<Quote, QuoteParseError> {
     let original_input = input;
     let (input, header) = quote_header_parser(input)?;
     let body_length = match header.version {
@@ -318,14 +317,23 @@ pub fn quote_parser(input: &[u8]) -> IResult<&[u8], Quote> {
             |_| nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail)),
         )?;
 
-    Ok((
-        input,
-        Quote {
-            header,
-            td_quote_body,
-            signature,
-            attestation_key,
-            certification_data,
-        },
-    ))
+    Ok(Quote {
+        header,
+        td_quote_body,
+        signature,
+        attestation_key,
+        certification_data,
+    })
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum QuoteParseError {
+    Parse,
+    Verification,
+}
+
+impl From<nom::Err<nom::error::Error<&[u8]>>> for QuoteParseError {
+    fn from(_: nom::Err<nom::error::Error<&[u8]>>) -> QuoteParseError {
+        QuoteParseError::Parse
+    }
 }
