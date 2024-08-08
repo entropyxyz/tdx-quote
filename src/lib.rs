@@ -15,7 +15,7 @@ use nom::{
     sequence::tuple,
     IResult,
 };
-use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+pub use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 
 const QUOTE_HEADER_LENGTH: usize = 48;
 const V4_QUOTE_BODY_LENGTH: usize = 584;
@@ -25,7 +25,7 @@ const V5_QUOTE_BODY_LENGTH: usize = V4_QUOTE_BODY_LENGTH + 64;
 #[derive(Debug, Eq, PartialEq)]
 pub struct Quote {
     pub header: QuoteHeader,
-    pub td_quote_body: TDQuoteBody,
+    pub body: QuoteBody,
     pub signature: Signature,
     pub attestation_key: VerifyingKey,
     pub certification_data: CertificationData,
@@ -36,6 +36,9 @@ impl Quote {
     pub fn from_bytes(original_input: &[u8]) -> Result<Self, QuoteParseError> {
         // Parse header
         let (input, header) = quote_header_parser(original_input)?;
+        if header.attestation_key_type != AttestionKeyType::ECDSA256WithP256 {
+            return Err(QuoteParseError::UnsupportedAttestationKeyType);
+        };
         let body_length = match header.version {
             4 => V4_QUOTE_BODY_LENGTH,
             5 => V5_QUOTE_BODY_LENGTH,
@@ -46,21 +49,17 @@ impl Quote {
         let signed_data = &original_input[..QUOTE_HEADER_LENGTH + body_length];
 
         // Parse body
-        let (input, td_quote_body) = td_body_parser(input, header.version)?;
+        let (input, body) = body_parser(input, header.version)?;
 
         // Signature
         let (input, _signature_section_length) = le_i32(input)?;
         let (input, signature) = take(64u8)(input)?;
-        let signature = Signature::from_bytes(signature.into()).map_err(|_| {
-            nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
-        })?;
+        let signature = Signature::from_bytes(signature.into())?;
 
         // Attestation key
         let (input, attestation_key) = take(64u8)(input)?;
         let attestation_key = [&[04], attestation_key].concat(); // 0x04 means uncompressed
-        let attestation_key = VerifyingKey::from_sec1_bytes(&attestation_key).map_err(|_| {
-            nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
-        })?;
+        let attestation_key = VerifyingKey::from_sec1_bytes(&attestation_key)?;
 
         // Verify signature
         attestation_key.verify(signed_data, &signature)?;
@@ -75,29 +74,21 @@ impl Quote {
 
         Ok(Quote {
             header,
-            td_quote_body,
+            body,
             signature,
             attestation_key,
             certification_data,
         })
     }
 
-    fn body_v4(&self) -> TDQuoteBodyV4 {
-        // TODO do this without cloning
-        match self.td_quote_body.clone() {
-            TDQuoteBody::V4(body_v4) => body_v4,
-            TDQuoteBody::V5 { td_quote_body, .. } => td_quote_body.td_quote_body_v4,
-        }
-    }
-
     /// Returns the report data
     pub fn report_input_data(&self) -> [u8; 64] {
-        self.body_v4().reportdata
+        self.body.reportdata
     }
 
     /// Returns the build-time measurement register
     pub fn mrtd(&self) -> [u8; 48] {
-        self.body_v4().mrtd
+        self.body.mrtd
     }
 }
 
@@ -125,7 +116,8 @@ impl TryFrom<u32> for TEEType {
 #[derive(Debug, Eq, PartialEq)]
 pub enum AttestionKeyType {
     ECDSA256WithP256,
-    ECDSA384WithP384, // Not yet supported by TDX
+    /// Not yet supported by TDX
+    ECDSA384WithP384,
 }
 
 impl TryFrom<u16> for AttestionKeyType {
@@ -156,19 +148,29 @@ pub struct QuoteHeader {
     pub user_data: [u8; 20],
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum TDQuoteBody {
-    V4(TDQuoteBodyV4),
-    V5 {
-        td_quote_body_type: u16,
-        size: u32,
-        td_quote_body: TDQuoteBodyV5Inner,
-    },
+/// Version of TDX used to create the quote
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum TDXVersion {
+    One,
+    OnePointFive,
 }
 
-/// The main part of the body v4 (v5 also includes all these fields)
+impl TryFrom<u16> for TDXVersion {
+    type Error = QuoteParseError;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            2 => Ok(TDXVersion::One),
+            3 => Ok(TDXVersion::OnePointFive),
+            _ => Err(QuoteParseError::Parse),
+        }
+    }
+}
+
+/// A TDX quote body
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct TDQuoteBodyV4 {
+pub struct QuoteBody {
+    pub tdx_version: TDXVersion,
     pub tee_tcb_svn: [u8; 16],
     pub mrseam: [u8; 48],
     pub mrsignerseam: [u8; 48],
@@ -187,17 +189,13 @@ pub struct TDQuoteBodyV4 {
     pub rtmr3: [u8; 48],
     /// User defined input data
     pub reportdata: [u8; 64],
+    // Optional as only for TDX 1.5
+    pub tee_tcb_svn_2: Option<[u8; 16]>,
+    // Optional as only for TDX 1.5
+    pub mrservicetd: Option<[u8; 48]>,
 }
 
-/// A v5 quote body - which is the same as the v4 body but with 2 extra fields
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TDQuoteBodyV5Inner {
-    pub td_quote_body_v4: TDQuoteBodyV4,
-    pub tee_tcb_svn_2: [u8; 16],
-    pub mrservicetd: [u8; 48],
-}
-
-/// Data required to verify the QE Report Signature
+/// Data related to certifying the QE Report
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq)]
 pub enum CertificationData {
@@ -244,15 +242,53 @@ fn quote_header_parser(input: &[u8]) -> IResult<&[u8], QuoteHeader> {
                 tee_type: tee_type.try_into()?,
                 reserved1,
                 reserved2,
-                qe_vendor_id, // can use Uuid
+                qe_vendor_id,
                 user_data,
             })
         },
     )(input)
 }
 
-/// Parser for a v4 quote body
-fn td_quote_body_v4_parser(input: &[u8]) -> IResult<&[u8], TDQuoteBodyV4> {
+/// Parser for a quote body
+fn body_parser(input: &[u8], version: u16) -> IResult<&[u8], QuoteBody> {
+    let (input, tdx_version) = match version {
+        // For a version 4 quote format, we know its TDX v1
+        4 => (input, TDXVersion::One),
+        // For version 5 quote format, read the TDX version from the quote
+        5 => {
+            let (input, body_type) = le_u16(input)?;
+            let (input, _body_size) = le_u32(input)?;
+            (
+                input,
+                body_type.try_into().map_err(|_| {
+                    nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
+                })?,
+            )
+        }
+        _ => {
+            return Err(nom::Err::Failure(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Fail,
+            )))
+        }
+    };
+    // Process the body assuming TDX v1, then add the extra bits for v1.5 if needed
+    let (input, mut body) = basic_body_parser(input)?;
+    let input = if tdx_version == TDXVersion::OnePointFive {
+        body.tdx_version = TDXVersion::OnePointFive;
+        let (input, tee_tcb_svn_2) = take16(input)?;
+        body.tee_tcb_svn_2 = Some(tee_tcb_svn_2);
+        let (input, mrservicetd) = take48(input)?;
+        body.mrservicetd = Some(mrservicetd);
+        input
+    } else {
+        input
+    };
+    return Ok((input, body));
+}
+
+/// Parser for a quote body - omitting optional extra fields for TDX 1.5
+fn basic_body_parser(input: &[u8]) -> IResult<&[u8], QuoteBody> {
     map(
         tuple((
             take16, take48, take48, take8, take8, take8, take48, take48, take48, take48, take48,
@@ -274,7 +310,8 @@ fn td_quote_body_v4_parser(input: &[u8]) -> IResult<&[u8], TDQuoteBodyV4> {
             rtmr2,
             rtmr3,
             reportdata,
-        )| TDQuoteBodyV4 {
+        )| QuoteBody {
+            tdx_version: TDXVersion::One,
             tee_tcb_svn,
             mrseam,
             mrsignerseam,
@@ -290,40 +327,8 @@ fn td_quote_body_v4_parser(input: &[u8]) -> IResult<&[u8], TDQuoteBodyV4> {
             rtmr2,
             rtmr3,
             reportdata,
+            tee_tcb_svn_2: None,
+            mrservicetd: None,
         },
     )(input)
-}
-
-/// Parser for a v5 quote body
-fn td_quote_body_v5_inner_parser(input: &[u8]) -> IResult<&[u8], TDQuoteBodyV5Inner> {
-    map(
-        tuple((td_quote_body_v4_parser, take16, take48)),
-        |(td_quote_body_v4, tee_tcb_svn_2, mrservicetd)| TDQuoteBodyV5Inner {
-            td_quote_body_v4,
-            tee_tcb_svn_2,
-            mrservicetd,
-        },
-    )(input)
-}
-
-/// Parse for a quote body
-fn td_body_parser(input: &[u8], version: u16) -> IResult<&[u8], TDQuoteBody> {
-    match version {
-        4 => {
-            let (input, td_quote_body) = td_quote_body_v4_parser(&input)?;
-            Ok((input, TDQuoteBody::V4(td_quote_body)))
-        }
-        5 => map(
-            tuple((le_u16, le_u32, td_quote_body_v5_inner_parser)),
-            |(td_quote_body_type, size, td_quote_body)| TDQuoteBody::V5 {
-                td_quote_body_type,
-                size,
-                td_quote_body,
-            },
-        )(input),
-        _ => Err(nom::Err::Failure(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Fail,
-        ))),
-    }
 }

@@ -8,6 +8,7 @@ pub enum QuoteParseError {
     UnknownCertificationDataType,
     UnknownQuoteVersion,
     IntConversionError,
+    UnsupportedAttestationKeyType,
 }
 
 impl Display for QuoteParseError {
@@ -20,6 +21,9 @@ impl Display for QuoteParseError {
             }
             QuoteParseError::UnknownQuoteVersion => f.write_str("Unknown quote version"),
             QuoteParseError::IntConversionError => f.write_str("Integer conversion error"),
+            QuoteParseError::UnsupportedAttestationKeyType => {
+                f.write_str("Unsupported attestion key type")
+            }
         }
     }
 }
