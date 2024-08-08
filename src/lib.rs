@@ -1,4 +1,10 @@
 #![no_std]
+mod error;
+mod take_n;
+
+pub use error::QuoteParseError;
+use take_n::{take16, take2, take20, take48, take64, take8};
+
 extern crate alloc;
 use alloc::vec::Vec;
 
@@ -11,9 +17,89 @@ use nom::{
 };
 use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 
-mod take_n;
+const QUOTE_HEADER_LENGTH: usize = 48;
+const V4_QUOTE_BODY_LENGTH: usize = 584;
+const V5_QUOTE_BODY_LENGTH: usize = V4_QUOTE_BODY_LENGTH + 64;
 
-use take_n::{take16, take2, take20, take48, take64, take8};
+/// A TDX Quote
+#[derive(Debug, Eq, PartialEq)]
+pub struct Quote {
+    pub header: QuoteHeader,
+    pub td_quote_body: TDQuoteBody,
+    pub signature: Signature,
+    pub attestation_key: VerifyingKey,
+    pub certification_data: CertificationData,
+}
+
+impl Quote {
+    /// Parse and validate a TDX quote
+    pub fn from_bytes(original_input: &[u8]) -> Result<Self, QuoteParseError> {
+        // Parse header
+        let (input, header) = quote_header_parser(original_input)?;
+        let body_length = match header.version {
+            4 => V4_QUOTE_BODY_LENGTH,
+            5 => V5_QUOTE_BODY_LENGTH,
+            _ => return Err(QuoteParseError::UnknownQuoteVersion),
+        };
+
+        // Get signed data
+        let signed_data = &original_input[..QUOTE_HEADER_LENGTH + body_length];
+
+        // Parse body
+        let (input, td_quote_body) = td_body_parser(input, header.version)?;
+
+        // Signature
+        let (input, _signature_section_length) = le_i32(input)?;
+        let (input, signature) = take(64u8)(input)?;
+        let signature = Signature::from_bytes(signature.into()).map_err(|_| {
+            nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
+        })?;
+
+        // Attestation key
+        let (input, attestation_key) = take(64u8)(input)?;
+        let attestation_key = [&[04], attestation_key].concat(); // 0x04 means uncompressed
+        let attestation_key = VerifyingKey::from_sec1_bytes(&attestation_key).map_err(|_| {
+            nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
+        })?;
+
+        // Verify signature
+        attestation_key.verify(signed_data, &signature)?;
+
+        // Certification data
+        let (input, certification_data_type) = le_i16(input)?;
+        let (input, certification_dat_len) = le_i32(input)?;
+        let certification_dat_len: usize = certification_dat_len.try_into()?;
+        let (_input, certification_data) = take(certification_dat_len)(input)?;
+        let certification_data =
+            CertificationData::new(certification_data_type, certification_data.to_vec())?;
+
+        Ok(Quote {
+            header,
+            td_quote_body,
+            signature,
+            attestation_key,
+            certification_data,
+        })
+    }
+
+    fn body_v4(&self) -> TDQuoteBodyV4 {
+        // TODO do this without cloning
+        match self.td_quote_body.clone() {
+            TDQuoteBody::V4(body_v4) => body_v4,
+            TDQuoteBody::V5 { td_quote_body, .. } => td_quote_body.td_quote_body_v4,
+        }
+    }
+
+    /// Returns the report data
+    pub fn report_input_data(&self) -> [u8; 64] {
+        self.body_v4().reportdata
+    }
+
+    /// Returns the build-time measurement register
+    pub fn mrtd(&self) -> [u8; 48] {
+        self.body_v4().mrtd
+    }
+}
 
 /// Type of TEE used
 #[derive(Debug, Eq, PartialEq)]
@@ -68,36 +154,6 @@ pub struct QuoteHeader {
     /// UUID for the quoting enclave vendor
     pub qe_vendor_id: [u8; 16], // Could use Uuid crate
     pub user_data: [u8; 20],
-}
-
-/// A TDX Quote
-#[derive(Debug, Eq, PartialEq)]
-pub struct Quote {
-    pub header: QuoteHeader,
-    pub td_quote_body: TDQuoteBody,
-    pub signature: Signature,
-    pub attestation_key: VerifyingKey,
-    pub certification_data: CertificationData,
-}
-
-impl Quote {
-    fn body_v4(&self) -> TDQuoteBodyV4 {
-        // TODO do this without cloning
-        match self.td_quote_body.clone() {
-            TDQuoteBody::V4(body_v4) => body_v4,
-            TDQuoteBody::V5 { td_quote_body, .. } => td_quote_body.td_quote_body_v4,
-        }
-    }
-
-    /// Returns the report data
-    pub fn report_input_data(&self) -> [u8; 64] {
-        self.body_v4().reportdata
-    }
-
-    /// Returns the build-time measurement register
-    pub fn mrtd(&self) -> [u8; 48] {
-        self.body_v4().mrtd
-    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -269,74 +325,5 @@ fn td_body_parser(input: &[u8], version: u16) -> IResult<&[u8], TDQuoteBody> {
             input,
             nom::error::ErrorKind::Fail,
         ))),
-    }
-}
-
-/// Parse a TDX quote
-pub fn quote_parser(input: &[u8]) -> Result<Quote, QuoteParseError> {
-    let original_input = input;
-    let (input, header) = quote_header_parser(input)?;
-    let body_length = match header.version {
-        4 => 584,
-        5 => 584 + 64,
-        _ => 0, // TODO
-    };
-    let signed_data = &original_input[..48 + body_length];
-    let (input, td_quote_body) = td_body_parser(input, header.version)?;
-
-    // Signature
-    let (input, _signature_section_length) = le_i32(input)?;
-    let (input, signature) = take(64u8)(input)?;
-    let signature = Signature::from_bytes(signature.into()).map_err(|_| {
-        nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
-    })?;
-
-    // Attestation key
-    let (input, attestation_key) = take(64u8)(input)?;
-    let attestation_key = [&[04], attestation_key].concat(); // 0x04 means uncompressed
-    let attestation_key = VerifyingKey::from_sec1_bytes(&attestation_key).map_err(|_| {
-        nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
-    })?;
-
-    // Verify signature
-    attestation_key.verify(signed_data, &signature)?;
-
-    // Certification data
-    let (input, certification_data_type) = le_i16(input)?;
-    let (input, certification_dat_len) = le_i32(input)?;
-    let certification_dat_len: usize = certification_dat_len.try_into().map_err(|_| {
-        nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
-    })?;
-    let (input, certification_data) = take(certification_dat_len)(input)?;
-    let certification_data =
-        CertificationData::new(certification_data_type, certification_data.to_vec()).map_err(
-            |_| nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail)),
-        )?;
-
-    Ok(Quote {
-        header,
-        td_quote_body,
-        signature,
-        attestation_key,
-        certification_data,
-    })
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum QuoteParseError {
-    Parse,
-    Verification,
-    UnknownCertificationDataType,
-}
-
-impl From<nom::Err<nom::error::Error<&[u8]>>> for QuoteParseError {
-    fn from(_: nom::Err<nom::error::Error<&[u8]>>) -> QuoteParseError {
-        QuoteParseError::Parse
-    }
-}
-
-impl From<p256::ecdsa::Error> for QuoteParseError {
-    fn from(_: p256::ecdsa::Error) -> QuoteParseError {
-        QuoteParseError::Verification
     }
 }
