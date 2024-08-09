@@ -92,6 +92,7 @@ impl Quote {
         self.body.mrtd
     }
 
+    /// Create a mock quote
     pub fn mock(mut signing_key: SigningKey, reportdata: [u8; 64]) -> Self {
         let header = QuoteHeader {
             version: 4,
@@ -122,9 +123,11 @@ impl Quote {
             tee_tcb_svn_2: None,
             mrservicetd: None,
         };
-        // TODO serialize header and body to get message to sign
-        let message = b"lsdfkj";
-        let signature = signing_key.sign(message);
+        // Serialize header and body to get message to sign
+        let mut message = [0; QUOTE_HEADER_LENGTH + V4_QUOTE_BODY_LENGTH];
+        message[..QUOTE_HEADER_LENGTH].copy_from_slice(&quote_header_serializer(&header));
+        message[QUOTE_HEADER_LENGTH..].copy_from_slice(&quote_body_v4_serializer(&body));
+        let signature = signing_key.sign(&message);
 
         Quote {
             header,
@@ -137,7 +140,7 @@ impl Quote {
 }
 
 /// Type of TEE used
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum TEEType {
     SGX = 0x00000000,
     TDX = 0x00000081,
@@ -157,11 +160,11 @@ impl TryFrom<u32> for TEEType {
 
 /// Type of the Attestation Key used by the Quoting Enclave
 #[non_exhaustive]
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum AttestionKeyType {
-    ECDSA256WithP256,
+    ECDSA256WithP256 = 2,
     /// Not yet supported by TDX
-    ECDSA384WithP384,
+    ECDSA384WithP384 = 3,
 }
 
 impl TryFrom<u16> for AttestionKeyType {
@@ -293,6 +296,27 @@ fn quote_header_parser(input: &[u8]) -> IResult<&[u8], QuoteHeader> {
     )(input)
 }
 
+pub fn quote_header_serializer(input: &QuoteHeader) -> [u8; QUOTE_HEADER_LENGTH] {
+    let mut output = [1; QUOTE_HEADER_LENGTH];
+    let version = input.version.to_le_bytes();
+    output[..2].copy_from_slice(&version);
+
+    let attestation_key_type = input.attestation_key_type.clone() as u16;
+    let attestation_key_type = attestation_key_type.to_le_bytes();
+    output[2..4].copy_from_slice(&attestation_key_type);
+
+    let tee_type = input.tee_type.clone() as u32;
+    let tee_type = tee_type.to_le_bytes();
+    output[4..8].copy_from_slice(&tee_type);
+
+    output[8..10].copy_from_slice(&input.reserved1);
+    output[10..12].copy_from_slice(&input.reserved2);
+    output[12..28].copy_from_slice(&input.qe_vendor_id);
+    output[28..48].copy_from_slice(&input.user_data);
+
+    output
+}
+
 /// Parser for a quote body
 fn body_parser(input: &[u8], version: u16) -> IResult<&[u8], QuoteBody> {
     let (input, tdx_version) = match version {
@@ -329,6 +353,26 @@ fn body_parser(input: &[u8], version: u16) -> IResult<&[u8], QuoteBody> {
         input
     };
     return Ok((input, body));
+}
+
+pub fn quote_body_v4_serializer(input: &QuoteBody) -> [u8; V4_QUOTE_BODY_LENGTH] {
+    let mut output = [1; V4_QUOTE_BODY_LENGTH];
+    output[..16].copy_from_slice(&input.tee_tcb_svn);
+    output[16..64].copy_from_slice(&input.mrseam);
+    output[64..112].copy_from_slice(&input.mrsignerseam);
+    output[112..120].copy_from_slice(&input.seamattributes);
+    output[120..128].copy_from_slice(&input.tdattributes);
+    output[128..136].copy_from_slice(&input.xfam);
+    output[136..184].copy_from_slice(&input.mrtd);
+    output[184..232].copy_from_slice(&input.mrconfigid);
+    output[232..280].copy_from_slice(&input.mrowner);
+    output[280..328].copy_from_slice(&input.mrownerconfig);
+    output[328..376].copy_from_slice(&input.rtmr0);
+    output[376..424].copy_from_slice(&input.rtmr1);
+    output[424..472].copy_from_slice(&input.rtmr2);
+    output[472..520].copy_from_slice(&input.rtmr3);
+    output[520..].copy_from_slice(&input.reportdata);
+    output
 }
 
 /// Parser for a quote body - omitting optional extra fields for TDX 1.5
