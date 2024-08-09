@@ -15,6 +15,7 @@ use nom::{
     sequence::tuple,
     IResult,
 };
+use p256::ecdsa::{signature::SignerMut, SigningKey};
 pub use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 
 const QUOTE_HEADER_LENGTH: usize = 48;
@@ -89,6 +90,49 @@ impl Quote {
     /// Returns the build-time measurement register
     pub fn mrtd(&self) -> [u8; 48] {
         self.body.mrtd
+    }
+
+    pub fn mock(mut signing_key: SigningKey, reportdata: [u8; 64]) -> Self {
+        let header = QuoteHeader {
+            version: 4,
+            attestation_key_type: AttestionKeyType::ECDSA256WithP256,
+            tee_type: TEEType::TDX,
+            reserved1: Default::default(),
+            reserved2: Default::default(),
+            qe_vendor_id: Default::default(), // Could use Uuid crate
+            user_data: Default::default(),
+        };
+        let body = QuoteBody {
+            tdx_version: TDXVersion::One,
+            tee_tcb_svn: Default::default(),
+            mrseam: [0; 48],
+            mrsignerseam: [0; 48],
+            seamattributes: Default::default(),
+            tdattributes: Default::default(),
+            xfam: Default::default(),
+            mrtd: [0; 48],
+            mrconfigid: [0; 48],
+            mrowner: [0; 48],
+            mrownerconfig: [0; 48],
+            rtmr0: [0; 48],
+            rtmr1: [0; 48],
+            rtmr2: [0; 48],
+            rtmr3: [0; 48],
+            reportdata,
+            tee_tcb_svn_2: None,
+            mrservicetd: None,
+        };
+        // TODO serialize header and body to get message to sign
+        let message = b"lsdfkj";
+        let signature = signing_key.sign(message);
+
+        Quote {
+            header,
+            body,
+            attestation_key: VerifyingKey::from(&signing_key),
+            signature,
+            certification_data: CertificationData::QeReportCertificationData(Default::default()),
+        }
     }
 }
 
