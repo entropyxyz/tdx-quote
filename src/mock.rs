@@ -6,6 +6,9 @@ use crate::{
 };
 use p256::ecdsa::{signature::SignerMut, SigningKey, VerifyingKey};
 
+const V4_MOCK_QUOTE_LENGTH: usize =
+    QUOTE_HEADER_LENGTH + V4_QUOTE_BODY_LENGTH + 4 + 64 + 64 + 2 + 4;
+
 impl Quote {
     #[cfg(feature = "mock")]
     /// Create a mock quote
@@ -52,6 +55,38 @@ impl Quote {
             signature,
             certification_data: CertificationData::QeReportCertificationData(Default::default()),
         }
+    }
+
+    pub fn as_bytes(&self) -> [u8; V4_MOCK_QUOTE_LENGTH] {
+        let mut output = [1; V4_MOCK_QUOTE_LENGTH];
+        let header = quote_header_serializer(&self.header);
+        output[..48].copy_from_slice(&header);
+
+        let body = quote_body_v4_serializer(&self.body);
+        output[48..632].copy_from_slice(&body);
+
+        // TODO get actual signature section length
+        let signature_section_length = 0i32;
+        let signature_section_length = signature_section_length.to_le_bytes();
+        output[632..636].copy_from_slice(&signature_section_length);
+
+        let signature = self.signature.to_bytes();
+        output[636..700].copy_from_slice(&signature);
+
+        let attestation_key = self.attestation_key.to_sec1_bytes();
+        // remove 0x04 prefix
+        output[700..764].copy_from_slice(&attestation_key[1..]);
+
+        // Certification data type and length (there isn't actually any certification data)
+        let certification_data_type: i16 = 6;
+        let certification_data_type = certification_data_type.to_le_bytes();
+        output[764..766].copy_from_slice(&certification_data_type);
+
+        let certification_data_len = 0i32;
+        let certification_data_len = certification_data_len.to_le_bytes();
+        output[766..].copy_from_slice(&certification_data_len);
+
+        output
     }
 }
 
@@ -104,7 +139,7 @@ mod tests {
     use super::*;
     use crate::Quote;
     use std::{io::Read, vec::Vec};
-    // TODO this should be a unit test for private fn
+
     #[test]
     fn test_serialize_header() {
         let mut file = std::fs::File::open("tests/v4_quote.dat").unwrap();
@@ -115,7 +150,6 @@ mod tests {
         assert_eq!(serialized, input[..48]);
     }
 
-    // TODO this should be a unit test for private fn
     #[test]
     fn test_serialize_body() {
         let mut file = std::fs::File::open("tests/v4_quote.dat").unwrap();

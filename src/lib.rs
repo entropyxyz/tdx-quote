@@ -202,14 +202,15 @@ pub struct QuoteBody {
 /// Data related to certifying the QE Report
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq)]
+#[repr(i16)]
 pub enum CertificationData {
-    PckIdPpidPlainCpusvnPcesvn(Vec<u8>),
-    PckIdPpidRSA2048CpusvnPcesvn(Vec<u8>),
-    PckIdPpidRSA3072CpusvnPcesvn(Vec<u8>),
-    PckLeafCert(Vec<u8>),
-    PckCertChain(Vec<u8>),
-    QeReportCertificationData(Vec<u8>),
-    PlatformManifest(Vec<u8>),
+    PckIdPpidPlainCpusvnPcesvn(Vec<u8>) = 1,
+    PckIdPpidRSA2048CpusvnPcesvn(Vec<u8>) = 2,
+    PckIdPpidRSA3072CpusvnPcesvn(Vec<u8>) = 3,
+    PckLeafCert(Vec<u8>) = 4,
+    PckCertChain(Vec<u8>) = 5,
+    QeReportCertificationData(Vec<u8>) = 6,
+    PlatformManifest(Vec<u8>) = 7,
 }
 
 impl CertificationData {

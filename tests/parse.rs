@@ -26,4 +26,7 @@ fn test_create_mock_quote() {
     let signing_key = p256::ecdsa::SigningKey::random(&mut OsRng);
     let quote = Quote::mock(signing_key.clone(), [0; 64]);
     assert_eq!(quote.attestation_key, VerifyingKey::from(signing_key));
+    let quote_bytes = quote.as_bytes();
+    let quote_deserialized = Quote::from_bytes(&quote_bytes).unwrap();
+    assert_eq!(quote, quote_deserialized);
 }
