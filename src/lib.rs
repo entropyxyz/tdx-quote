@@ -18,7 +18,7 @@ use nom::{
     IResult,
 };
 #[cfg(feature = "mock")]
-pub use p256::ecdsa::VerifyingKey;
+pub use p256::ecdsa::SigningKey;
 pub use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 
 const QUOTE_HEADER_LENGTH: usize = 48;
