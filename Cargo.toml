@@ -13,3 +13,6 @@ p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"]}
 
 [dev-dependencies]
 rand_core = { version = "0.6.4", features = ["getrandom"] }
+
+[features]
+mock = []
