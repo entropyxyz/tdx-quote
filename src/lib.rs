@@ -1,5 +1,7 @@
 #![no_std]
 mod error;
+#[cfg(feature = "mock")]
+mod mock;
 mod take_n;
 
 pub use error::QuoteParseError;
@@ -58,7 +60,7 @@ impl Quote {
 
         // Attestation key
         let (input, attestation_key) = take(64u8)(input)?;
-        let attestation_key = [&[04], attestation_key].concat(); // 0x04 means uncompressed
+        let attestation_key = [&[4], attestation_key].concat(); // 0x04 means uncompressed
         let attestation_key = VerifyingKey::from_sec1_bytes(&attestation_key)?;
 
         // Verify signature
@@ -93,7 +95,7 @@ impl Quote {
 }
 
 /// Type of TEE used
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum TEEType {
     SGX = 0x00000000,
     TDX = 0x00000081,
@@ -113,11 +115,11 @@ impl TryFrom<u32> for TEEType {
 
 /// Type of the Attestation Key used by the Quoting Enclave
 #[non_exhaustive]
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum AttestionKeyType {
-    ECDSA256WithP256,
+    ECDSA256WithP256 = 2,
     /// Not yet supported by TDX
-    ECDSA384WithP384,
+    ECDSA384WithP384 = 3,
 }
 
 impl TryFrom<u16> for AttestionKeyType {
@@ -284,7 +286,7 @@ fn body_parser(input: &[u8], version: u16) -> IResult<&[u8], QuoteBody> {
     } else {
         input
     };
-    return Ok((input, body));
+    Ok((input, body))
 }
 
 /// Parser for a quote body - omitting optional extra fields for TDX 1.5
