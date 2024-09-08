@@ -31,3 +31,8 @@ pub fn take48(input: &[u8]) -> IResult<&[u8], [u8; 48]> {
 pub fn take64(input: &[u8]) -> IResult<&[u8], [u8; 64]> {
     map_res(take(64u8), |i: &[u8]| i.try_into())(input)
 }
+
+/// Parser for a [u8; 384]
+pub fn take384(input: &[u8]) -> IResult<&[u8], [u8; 384]> {
+    map_res(take(384u32), |i: &[u8]| i.try_into())(input)
+}

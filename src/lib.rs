@@ -5,7 +5,7 @@ mod mock;
 mod take_n;
 
 pub use error::QuoteParseError;
-use take_n::{take16, take2, take20, take48, take64, take8};
+use take_n::{take16, take2, take20, take384, take48, take64, take8};
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -93,6 +93,16 @@ impl Quote {
     /// Returns the build-time measurement register
     pub fn mrtd(&self) -> [u8; 48] {
         self.body.mrtd
+    }
+
+    pub fn qe_report_certification_data(&self) -> Option<QeReportCertificationData> {
+        if let CertificationData::QeReportCertificationData(qe_report_certification_data) =
+            &self.certification_data
+        {
+            Some(qe_report_certification_data.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -209,7 +219,7 @@ pub enum CertificationData {
     PckIdPpidRSA3072CpusvnPcesvn(Vec<u8>) = 3,
     PckLeafCert(Vec<u8>) = 4,
     PckCertChain(Vec<u8>) = 5,
-    QeReportCertificationData(Vec<u8>) = 6,
+    QeReportCertificationData(QeReportCertificationData) = 6,
     PlatformManifest(Vec<u8>) = 7,
 }
 
@@ -221,10 +231,37 @@ impl CertificationData {
             3 => Ok(Self::PckIdPpidRSA3072CpusvnPcesvn(data)),
             4 => Ok(Self::PckLeafCert(data)),
             5 => Ok(Self::PckCertChain(data)),
-            6 => Ok(Self::QeReportCertificationData(data)),
+            6 => Ok(Self::QeReportCertificationData(
+                QeReportCertificationData::new(data)?,
+            )),
             7 => Ok(Self::PlatformManifest(data)),
             _ => Err(QuoteParseError::UnknownCertificationDataType),
         }
+    }
+}
+
+/// Certification data which contains a signature from the PCK
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct QeReportCertificationData {
+    pub qe_report: [u8; 384],
+    /// Signature of the qe_report field made using the PCK key
+    pub signature: Signature,
+    /// TODO this should be separate fields once we figure out how to parse it
+    pub authentication_and_certification_data: Vec<u8>,
+}
+
+impl QeReportCertificationData {
+    fn new(input: Vec<u8>) -> Result<Self, QuoteParseError> {
+        let (input, qe_report) = take384(&input)?;
+        let (input, signature) = take64(&input)?;
+        let signature = Signature::from_bytes((&signature).into())?;
+        // QE authentication data - variable
+        // QE certification data - variable
+        Ok(Self {
+            qe_report,
+            signature,
+            authentication_and_certification_data: input.to_vec(),
+        })
     }
 }
 
