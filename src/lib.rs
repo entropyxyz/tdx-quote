@@ -5,6 +5,7 @@ mod mock;
 mod take_n;
 
 pub use error::QuoteParseError;
+use error::QuoteVerificationError;
 use take_n::{take16, take2, take20, take384, take48, take64, take8};
 
 extern crate alloc;
@@ -95,6 +96,7 @@ impl Quote {
         self.body.mrtd
     }
 
+    /// Returns the QeReportCertificationData if present
     pub fn qe_report_certification_data(&self) -> Option<QeReportCertificationData> {
         if let CertificationData::QeReportCertificationData(qe_report_certification_data) =
             &self.certification_data
@@ -103,6 +105,18 @@ impl Quote {
         } else {
             None
         }
+    }
+
+    /// Attempt to verify the report with a given provisioning certification key (PCK)
+    pub fn verify_with_pck(&self, pck: VerifyingKey) -> Result<(), QuoteVerificationError> {
+        let qe_report_certification_data = self
+            .qe_report_certification_data()
+            .ok_or(QuoteVerificationError::NoQeReportCertificationData)?;
+        pck.verify(
+            &qe_report_certification_data.qe_report[..],
+            &qe_report_certification_data.signature,
+        )?;
+        Ok(())
     }
 }
 

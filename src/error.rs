@@ -45,3 +45,15 @@ impl From<TryFromIntError> for QuoteParseError {
         QuoteParseError::IntConversionError
     }
 }
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum QuoteVerificationError {
+    NoQeReportCertificationData,
+    BadSignature,
+}
+
+impl From<p256::ecdsa::Error> for QuoteVerificationError {
+    fn from(_: p256::ecdsa::Error) -> QuoteVerificationError {
+        QuoteVerificationError::BadSignature
+    }
+}
