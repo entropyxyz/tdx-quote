@@ -277,6 +277,8 @@ pub struct QeReportCertificationData {
 }
 
 impl QeReportCertificationData {
+    /// Parse QeReportCertificationData from given input, checking the hash contains the given
+    /// attestation key
     fn new(input: Vec<u8>, attestation_key: Vec<u8>) -> Result<Self, QuoteParseError> {
         let (input, qe_report) = take384(&input)?;
         // The last part of the qe_report is the hash of the attestation key and authentication
