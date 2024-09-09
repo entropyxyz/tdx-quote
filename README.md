@@ -5,3 +5,5 @@ This is inspired by [tdx-quote-parser](https://github.com/MoeMahhouk/tdx-quote-p
 Full spec in [Intel TDX DCAP Quoting Library API](https://download.01.org/intel-sgx/latest/dcap-latest/linux/docs/Intel_TDX_DCAP_Quoting_Library_API.pdf), appendix 3.
 
 Warning: This is a work-in-progress and has not been audited.
+
+For quote generation, see [`configfs-tsm`](https://github.com/entropyxyz/configfs-tsm).
