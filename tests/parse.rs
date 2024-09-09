@@ -8,7 +8,6 @@ fn test_parse() {
     file.read_to_end(&mut input).unwrap();
     let quote = Quote::from_bytes(&input).unwrap();
     assert_eq!(quote.header.version, 4);
-    // println!("{:?}", quote);
 
     let pck = [
         4, 166, 103, 136, 58, 157, 155, 124, 186, 75, 81, 133, 87, 255, 233, 182, 192, 125, 235,
@@ -16,8 +15,6 @@ fn test_parse() {
         28, 180, 75, 161, 36, 115, 159, 76, 117, 226, 46, 114, 91, 196, 239, 248, 64, 168, 25, 255,
         101, 241, 162, 113, 245, 253, 148,
     ];
-    // if pck is only 64 bytes, add the flag
-    // let pck = [&[4], &pck[..]].concat(); // 0x04 means uncompressed
     let pck = VerifyingKey::from_sec1_bytes(&pck).unwrap();
     quote.verify_with_pck(pck).unwrap();
 
