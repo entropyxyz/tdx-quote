@@ -21,6 +21,7 @@ use nom::{
 #[cfg(feature = "mock")]
 pub use p256::ecdsa::SigningKey;
 pub use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+use sha2::{Digest, Sha256};
 
 const QUOTE_HEADER_LENGTH: usize = 48;
 const V4_QUOTE_BODY_LENGTH: usize = 584;
@@ -63,6 +64,7 @@ impl Quote {
 
         // Attestation key
         let (input, attestation_key) = take(64u8)(input)?;
+        let attestation_key_bytes = attestation_key;
         let attestation_key = [&[4], attestation_key].concat(); // 0x04 means uncompressed
         let attestation_key = VerifyingKey::from_sec1_bytes(&attestation_key)?;
 
@@ -74,8 +76,11 @@ impl Quote {
         let (input, certification_dat_len) = le_i32(input)?;
         let certification_dat_len: usize = certification_dat_len.try_into()?;
         let (_input, certification_data) = take(certification_dat_len)(input)?;
-        let certification_data =
-            CertificationData::new(certification_data_type, certification_data.to_vec())?;
+        let certification_data = CertificationData::new(
+            certification_data_type,
+            certification_data.to_vec(),
+            attestation_key_bytes.to_vec(),
+        )?;
 
         Ok(Quote {
             header,
@@ -238,7 +243,11 @@ pub enum CertificationData {
 }
 
 impl CertificationData {
-    pub fn new(certification_data_type: i16, data: Vec<u8>) -> Result<Self, QuoteParseError> {
+    pub fn new(
+        certification_data_type: i16,
+        data: Vec<u8>,
+        attestation_key: Vec<u8>,
+    ) -> Result<Self, QuoteParseError> {
         match certification_data_type {
             1 => Ok(Self::PckIdPpidPlainCpusvnPcesvn(data)),
             2 => Ok(Self::PckIdPpidRSA2048CpusvnPcesvn(data)),
@@ -246,7 +255,7 @@ impl CertificationData {
             4 => Ok(Self::PckLeafCert(data)),
             5 => Ok(Self::PckCertChain(data)),
             6 => Ok(Self::QeReportCertificationData(
-                QeReportCertificationData::new(data)?,
+                QeReportCertificationData::new(data, attestation_key)?,
             )),
             7 => Ok(Self::PlatformManifest(data)),
             _ => Err(QuoteParseError::UnknownCertificationDataType),
@@ -257,24 +266,48 @@ impl CertificationData {
 /// Certification data which contains a signature from the PCK
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct QeReportCertificationData {
+    /// This should contain SHA256(attestation_public_key || QE authentication data) || 32 null from_bytes
     pub qe_report: [u8; 384],
     /// Signature of the qe_report field made using the PCK key
     pub signature: Signature,
-    /// TODO this should be separate fields once we figure out how to parse it
-    pub authentication_and_certification_data: Vec<u8>,
+    /// Authentication data used by the quoting enclave to provide additional context
+    pub qe_authentication_data: Vec<u8>,
+    /// Data required to verify the QE report signature
+    pub certification_data: Vec<u8>,
 }
 
 impl QeReportCertificationData {
-    fn new(input: Vec<u8>) -> Result<Self, QuoteParseError> {
+    /// Parse QeReportCertificationData from given input, checking the hash contains the given
+    /// attestation key
+    fn new(input: Vec<u8>, attestation_key: Vec<u8>) -> Result<Self, QuoteParseError> {
         let (input, qe_report) = take384(&input)?;
+        // The last part of the qe_report is the hash of the attestation key and authentication
+        // data, followed by 32 null bytes (which we ignore)
+        let expected_hash = &qe_report[384 - 64..384 - 32];
+
         let (input, signature) = take64(&input)?;
         let signature = Signature::from_bytes((&signature).into())?;
-        // QE authentication data - variable
-        // QE certification data - variable
+
+        let (input, qe_authentication_data_size) = le_u16(input)?;
+        let (certification_data, qe_authentication_data) =
+            take(qe_authentication_data_size)(input)?;
+
+        // Check the hash in the qe_report
+        let hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(&attestation_key);
+            hasher.update(&qe_authentication_data);
+            hasher.finalize()
+        };
+        if hash[..] != *expected_hash {
+            return Err(QuoteParseError::AttestationKeyDoesNotMatch);
+        }
+
         Ok(Self {
             qe_report,
             signature,
-            authentication_and_certification_data: input.to_vec(),
+            qe_authentication_data: qe_authentication_data.to_vec(),
+            certification_data: certification_data.to_vec(),
         })
     }
 }

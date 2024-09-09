@@ -9,6 +9,7 @@ pub enum QuoteParseError {
     UnknownQuoteVersion,
     IntConversionError,
     UnsupportedAttestationKeyType,
+    AttestationKeyDoesNotMatch,
 }
 
 impl Display for QuoteParseError {
@@ -23,6 +24,9 @@ impl Display for QuoteParseError {
             QuoteParseError::IntConversionError => f.write_str("Integer conversion error"),
             QuoteParseError::UnsupportedAttestationKeyType => {
                 f.write_str("Unsupported attestion key type")
+            }
+            QuoteParseError::AttestationKeyDoesNotMatch => {
+                f.write_str("Attestation key does not match hash in QE report")
             }
         }
     }
