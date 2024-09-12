@@ -287,8 +287,8 @@ impl QeReportCertificationData {
 
         let (input, signature) = take64(&input)?;
         let signature = Signature::from_bytes((&signature).into())?;
-
-        let (input, qe_authentication_data_size) = le_u16(input)?;
+        let (input, qe_authentication_data_size) = le_i16(input)?;
+        let qe_authentication_data_size: usize = qe_authentication_data_size.try_into()?;
         let (certification_data, qe_authentication_data) =
             take(qe_authentication_data_size)(input)?;
 
