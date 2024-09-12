@@ -1,10 +1,12 @@
 #![cfg(feature = "mock")]
 
 use crate::{
-    AttestionKeyType, CertificationData, Quote, QuoteBody, QuoteHeader, TDXVersion, TEEType,
-    QUOTE_HEADER_LENGTH, V4_QUOTE_BODY_LENGTH,
+    AttestionKeyType, CertificationData, QeReportCertificationData, Quote, QuoteBody, QuoteHeader,
+    TDXVersion, TEEType, QUOTE_HEADER_LENGTH, V4_QUOTE_BODY_LENGTH,
 };
+use alloc::vec::Vec;
 use p256::ecdsa::{signature::SignerMut, SigningKey, VerifyingKey};
+use sha2::{Digest, Sha256};
 
 const V4_MOCK_QUOTE_LENGTH: usize =
     QUOTE_HEADER_LENGTH + V4_QUOTE_BODY_LENGTH + 4 + 64 + 64 + 2 + 4;
@@ -48,17 +50,40 @@ impl Quote {
         message[QUOTE_HEADER_LENGTH..].copy_from_slice(&quote_body_v4_serializer(&body));
         let signature = signing_key.sign(&message);
 
+        let verifying_key = signing_key.verifying_key().to_sec1_bytes();
+        // Create a mock qe_report_cerification_data
+        let qe_authentication_data = Default::default();
+        let hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(&verifying_key[1..]);
+            hasher.update(&qe_authentication_data);
+            hasher.finalize()
+        };
+        let mut qe_report = [0u8; 384];
+        {
+            let (_left, right) = qe_report.split_at_mut(384 - 64);
+            right[..32].copy_from_slice(&hash);
+        }
+        let qe_report_cerification_data = QeReportCertificationData {
+            qe_report,
+            signature: signing_key.sign(&qe_report),
+            qe_authentication_data,
+            certification_data: Default::default(),
+        };
+
         Quote {
             header,
             body,
             attestation_key: VerifyingKey::from(&signing_key),
             signature,
-            certification_data: CertificationData::QeReportCertificationData(Default::default()),
+            certification_data: CertificationData::QeReportCertificationData(
+                qe_report_cerification_data,
+            ),
         }
     }
 
-    pub fn as_bytes(&self) -> [u8; V4_MOCK_QUOTE_LENGTH] {
-        let mut output = [1; V4_MOCK_QUOTE_LENGTH];
+    pub fn as_bytes(&self) -> [u8; V4_MOCK_QUOTE_LENGTH + 384 + 64 + 2] {
+        let mut output = [1; V4_MOCK_QUOTE_LENGTH + 384 + 64 + 2];
         let header = quote_header_serializer(&self.header);
         output[..48].copy_from_slice(&header);
 
@@ -77,17 +102,37 @@ impl Quote {
         // remove 0x04 prefix
         output[700..764].copy_from_slice(&attestation_key[1..]);
 
-        // Certification data type and length (there isn't actually any certification data)
+        // Certification data type
         let certification_data_type: i16 = 6;
         let certification_data_type = certification_data_type.to_le_bytes();
         output[764..766].copy_from_slice(&certification_data_type);
 
-        let certification_data_len = 0i32;
+        let certification_data = certification_data_serializer(&self.certification_data);
+        let certification_data_len: i32 = certification_data.len().try_into().unwrap();
         let certification_data_len = certification_data_len.to_le_bytes();
-        output[766..].copy_from_slice(&certification_data_len);
+        output[766..770].copy_from_slice(&certification_data_len);
 
+        output[770..].copy_from_slice(&certification_data);
         output
     }
+}
+
+fn certification_data_serializer(input: &CertificationData) -> Vec<u8> {
+    let mut output = [0u8; 384 + 64 + 2];
+    match input {
+        CertificationData::QeReportCertificationData(qe_report_certification_data) => {
+            output[..384].copy_from_slice(&qe_report_certification_data.qe_report);
+            let signature = qe_report_certification_data.signature.to_bytes();
+            output[384..384 + 64].copy_from_slice(&signature);
+
+            let qe_authentication_data_length = 0i16;
+            let qe_authentication_data_length = qe_authentication_data_length.to_le_bytes();
+            output[384 + 64..384 + 64 + 2].copy_from_slice(&qe_authentication_data_length);
+            // output[384 + 64..].copy_from_slice(qe_report_cerification_data.qe_authentication_data);
+        }
+        _ => todo!(),
+    }
+    output.to_vec()
 }
 
 /// Serialize a quote header, in order to get the data to sign for a mock quote
@@ -142,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_serialize_header() {
-        let mut file = std::fs::File::open("tests/v4_quote.dat").unwrap();
+        let mut file = std::fs::File::open("tests/test-quotes/v4_quote.dat").unwrap();
         let mut input = Vec::new();
         file.read_to_end(&mut input).unwrap();
         let quote = Quote::from_bytes(&input).unwrap();
@@ -152,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_serialize_body() {
-        let mut file = std::fs::File::open("tests/v4_quote.dat").unwrap();
+        let mut file = std::fs::File::open("tests/test-quotes/v4_quote.dat").unwrap();
         let mut input = Vec::new();
         file.read_to_end(&mut input).unwrap();
         let quote = Quote::from_bytes(&input).unwrap();
