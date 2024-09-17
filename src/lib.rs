@@ -5,7 +5,8 @@ mod mock;
 mod take_n;
 
 pub use error::QuoteParseError;
-use error::QuoteVerificationError;
+use error::{QuoteVerificationError, VerifyingKeyError};
+use p256::EncodedPoint;
 use take_n::{take16, take2, take20, take384, take48, take64, take8};
 
 extern crate alloc;
@@ -310,6 +311,25 @@ impl QeReportCertificationData {
             certification_data: certification_data.to_vec(),
         })
     }
+}
+
+/// Helper function to encode a public key as bytes
+pub fn encode_verifying_key(input: &VerifyingKey) -> Result<[u8; 33], VerifyingKeyError> {
+    Ok(input
+        .to_encoded_point(true)
+        .as_bytes()
+        .try_into()
+        .map_err(|_| VerifyingKeyError::BadSize)?)
+}
+
+/// Helper function to decode bytes to a public key
+pub fn decode_verifying_key(
+    verifying_key_encoded: &[u8; 33],
+) -> Result<VerifyingKey, VerifyingKeyError> {
+    let point = EncodedPoint::from_bytes(verifying_key_encoded)
+        .map_err(|_| VerifyingKeyError::DecodeEncodedPoint)?;
+    VerifyingKey::from_encoded_point(&point)
+        .map_err(|_| VerifyingKeyError::EncodedPointToVerifyingKey)
 }
 
 /// Parser for a quote header
