@@ -1,6 +1,7 @@
 use core::fmt::{self, Display};
 use core::num::TryFromIntError;
 
+/// An error when parsing a quote
 #[derive(Debug, Eq, PartialEq)]
 pub enum QuoteParseError {
     Parse,
@@ -59,5 +60,27 @@ pub enum QuoteVerificationError {
 impl From<p256::ecdsa::Error> for QuoteVerificationError {
     fn from(_: p256::ecdsa::Error) -> QuoteVerificationError {
         QuoteVerificationError::BadSignature
+    }
+}
+
+/// An error when handling a verifying key
+#[derive(Debug, Eq, PartialEq)]
+pub enum VerifyingKeyError {
+    DecodeEncodedPoint,
+    EncodedPointToVerifyingKey,
+    BadSize,
+}
+
+impl Display for VerifyingKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VerifyingKeyError::DecodeEncodedPoint => {
+                f.write_str("Could not decode to encoded point")
+            }
+            VerifyingKeyError::EncodedPointToVerifyingKey => {
+                f.write_str("Could not convert encoded point to verifying key")
+            }
+            VerifyingKeyError::BadSize => f.write_str("Compressed point has unexpected size"),
+        }
     }
 }
