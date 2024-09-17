@@ -41,9 +41,17 @@ fn test_parse() {
 fn test_create_mock_quote() {
     use rand_core::OsRng;
     use tdx_quote::VerifyingKey;
-    let signing_key = p256::ecdsa::SigningKey::random(&mut OsRng);
-    let quote = Quote::mock(signing_key.clone(), [0; 64]);
-    assert_eq!(quote.attestation_key, VerifyingKey::from(signing_key));
+    let attestation_key = p256::ecdsa::SigningKey::random(&mut OsRng);
+    let provisioning_certification_key = p256::ecdsa::SigningKey::random(&mut OsRng);
+    let quote = Quote::mock(
+        attestation_key.clone(),
+        provisioning_certification_key.clone(),
+        [0; 64],
+    );
+    assert_eq!(quote.attestation_key, VerifyingKey::from(attestation_key));
+    quote
+        .verify_with_pck(VerifyingKey::from(provisioning_certification_key))
+        .unwrap();
     let quote_bytes = quote.as_bytes();
     let quote_deserialized = Quote::from_bytes(&quote_bytes).unwrap();
     assert_eq!(quote, quote_deserialized);

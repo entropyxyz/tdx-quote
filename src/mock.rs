@@ -14,7 +14,11 @@ const V4_MOCK_QUOTE_LENGTH: usize =
 impl Quote {
     #[cfg(feature = "mock")]
     /// Create a mock quote
-    pub fn mock(mut signing_key: SigningKey, reportdata: [u8; 64]) -> Self {
+    pub fn mock(
+        mut attestation_key: SigningKey,
+        mut provisioning_certification_key: SigningKey,
+        reportdata: [u8; 64],
+    ) -> Self {
         let header = QuoteHeader {
             version: 4,
             attestation_key_type: AttestionKeyType::ECDSA256WithP256,
@@ -48,9 +52,9 @@ impl Quote {
         let mut message = [0; QUOTE_HEADER_LENGTH + V4_QUOTE_BODY_LENGTH];
         message[..QUOTE_HEADER_LENGTH].copy_from_slice(&quote_header_serializer(&header));
         message[QUOTE_HEADER_LENGTH..].copy_from_slice(&quote_body_v4_serializer(&body));
-        let signature = signing_key.sign(&message);
+        let signature = attestation_key.sign(&message);
 
-        let verifying_key = signing_key.verifying_key().to_sec1_bytes();
+        let verifying_key = attestation_key.verifying_key().to_sec1_bytes();
         // Create a mock qe_report_cerification_data
         let qe_authentication_data = Default::default();
         let hash = {
@@ -66,7 +70,7 @@ impl Quote {
         }
         let qe_report_cerification_data = QeReportCertificationData {
             qe_report,
-            signature: signing_key.sign(&qe_report),
+            signature: provisioning_certification_key.sign(&qe_report),
             qe_authentication_data,
             certification_data: Default::default(),
         };
@@ -74,7 +78,7 @@ impl Quote {
         Quote {
             header,
             body,
-            attestation_key: VerifyingKey::from(&signing_key),
+            attestation_key: VerifyingKey::from(&attestation_key),
             signature,
             certification_data: CertificationData::QeReportCertificationData(
                 qe_report_cerification_data,
