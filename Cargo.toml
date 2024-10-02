@@ -1,9 +1,9 @@
 [package]
 name = "tdx-quote"
-version = "0.1.0"
+description = "Parses and verifies Intel TDX quotes"
+version = "0.0.1"
 edition = "2021"
 authors   =['Entropy Cryptography <engineering@entropy.xyz>']
-homepage  ='https://entropy.xyz/'
 license   ='AGPL-3.0-or-later'
 repository='https://github.com/entropyxyz/tdx-quote'
 
