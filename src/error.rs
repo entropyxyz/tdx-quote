@@ -51,6 +51,7 @@ impl From<TryFromIntError> for QuoteParseError {
     }
 }
 
+/// An error when verifying a quote with a provisioning certification key (PCK)
 #[derive(Debug, Eq, PartialEq)]
 pub enum QuoteVerificationError {
     NoQeReportCertificationData,
