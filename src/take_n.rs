@@ -1,7 +1,5 @@
 use nom::{bytes::complete::take, combinator::map_res, IResult};
 
-// TODO make generic
-
 /// Parser for a [u8; 2]
 pub fn take2(input: &[u8]) -> IResult<&[u8], [u8; 2]> {
     map_res(take(2u8), |i: &[u8]| i.try_into())(input)

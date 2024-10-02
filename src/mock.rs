@@ -1,3 +1,4 @@
+//! Create 'mock' quotes, used for testing quote verification on platforms which do not have TDX
 #![cfg(feature = "mock")]
 
 use crate::{
@@ -94,7 +95,7 @@ impl Quote {
         let body = quote_body_v4_serializer(&self.body);
         output[48..632].copy_from_slice(&body);
 
-        // TODO get actual signature section length
+        // TODO #5 get actual signature section length
         let signature_section_length = 0i32;
         let signature_section_length = signature_section_length.to_le_bytes();
         output[632..636].copy_from_slice(&signature_section_length);
@@ -121,10 +122,11 @@ impl Quote {
     }
 }
 
+/// Serialize cerification data
 fn certification_data_serializer(input: &CertificationData) -> Vec<u8> {
-    let mut output = [0u8; 384 + 64 + 2];
     match input {
         CertificationData::QeReportCertificationData(qe_report_certification_data) => {
+            let mut output = [0u8; 384 + 64 + 2];
             output[..384].copy_from_slice(&qe_report_certification_data.qe_report);
             let signature = qe_report_certification_data.signature.to_bytes();
             output[384..384 + 64].copy_from_slice(&signature);
@@ -132,11 +134,15 @@ fn certification_data_serializer(input: &CertificationData) -> Vec<u8> {
             let qe_authentication_data_length = 0i16;
             let qe_authentication_data_length = qe_authentication_data_length.to_le_bytes();
             output[384 + 64..384 + 64 + 2].copy_from_slice(&qe_authentication_data_length);
-            // output[384 + 64..].copy_from_slice(qe_report_cerification_data.qe_authentication_data);
+            output.to_vec()
         }
-        _ => todo!(),
+        CertificationData::PckIdPpidPlainCpusvnPcesvn(data) => data.to_vec(),
+        CertificationData::PckIdPpidRSA2048CpusvnPcesvn(data) => data.to_vec(),
+        CertificationData::PckIdPpidRSA3072CpusvnPcesvn(data) => data.to_vec(),
+        CertificationData::PckLeafCert(data) => data.to_vec(),
+        CertificationData::PckCertChain(data) => data.to_vec(),
+        CertificationData::PlatformManifest(data) => data.to_vec(),
     }
-    output.to_vec()
 }
 
 /// Serialize a quote header, in order to get the data to sign for a mock quote
