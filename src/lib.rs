@@ -47,8 +47,29 @@ use sha2::{Digest, Sha256};
 const QUOTE_HEADER_LENGTH: usize = 48;
 const V4_QUOTE_BODY_LENGTH: usize = 584;
 const V5_QUOTE_BODY_LENGTH: usize = V4_QUOTE_BODY_LENGTH + 64;
+/// A v5 quote precedes the body with a two-byte body type and a four-byte body size. Those six bytes
+/// are part of the data covered by the attestation key's signature.
+const V5_BODY_DESCRIPTOR_LENGTH: usize = 6;
+
+/// Offset of the 16-byte `attributes` field inside an SGX report body.
+const QE_REPORT_ATTRIBUTES_OFFSET: usize = 64;
+/// Offset of the 32-byte `mr_enclave` field inside an SGX report body.
+const QE_REPORT_MR_ENCLAVE_OFFSET: usize = 80;
+/// Offset of the 32-byte `mr_signer` field inside an SGX report body.
+const QE_REPORT_MR_SIGNER_OFFSET: usize = 128;
+/// Offset of the 64-byte `report_data` field inside an SGX report body.
+const QE_REPORT_DATA_OFFSET: usize = 320;
+/// The `DEBUG` bit of the SGX attributes flags. An enclave with this bit set allows its memory to be
+/// inspected and modified by the host, so its report proves nothing.
+const SGX_ATTRIBUTE_FLAG_DEBUG: u64 = 0x02;
 
 /// A TDX Quote
+///
+/// Obtaining one of these means the quote was well formed and that its body is correctly signed by
+/// the attestation key embedded in it. It does *not* mean the quote came from genuine Intel
+/// hardware: that requires the attestation key to be tied back to Intel through the PCK certificate
+/// chain, which is what [`Quote::verify`] does. Do not act on any of the measurement registers
+/// before that has succeeded.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Quote {
     pub header: QuoteHeader,
@@ -60,23 +81,55 @@ pub struct Quote {
 
 impl Quote {
     /// Parse and validate a TDX quote
+    ///
+    /// This checks the internal consistency of the quote and that its body is signed by the
+    /// attestation key it carries. Establishing that the attestation key belongs to a real Intel
+    /// platform is a separate step - see [`Quote::verify`].
     pub fn from_bytes(original_input: &[u8]) -> Result<Self, QuoteParseError> {
         // Parse header
         let (input, header) = quote_header_parser(original_input)?;
         if header.attestation_key_type != AttestionKeyType::ECDSA256WithP256 {
             return Err(QuoteParseError::UnsupportedAttestationKeyType);
         };
-        let body_length = match header.version {
-            4 => V4_QUOTE_BODY_LENGTH,
-            5 => V5_QUOTE_BODY_LENGTH,
+        // The body layout parsed below is the TDX one. A quote from another TEE has a different body,
+        // which would otherwise be reinterpreted as TDX measurement registers, so the TEE type has to
+        // be pinned here rather than left for the caller to notice.
+        if header.tee_type != TEEType::TDX {
+            return Err(QuoteParseError::UnsupportedTeeType);
+        }
+        match header.version {
+            4 | 5 => {}
             _ => return Err(QuoteParseError::UnknownQuoteVersion),
-        };
-
-        // Get signed data
-        let signed_data = &original_input[..QUOTE_HEADER_LENGTH + body_length];
+        }
 
         // Parse body
         let (input, body) = body_parser(input, header.version)?;
+
+        // Get signed data: the header plus exactly the bytes the body parser consumed.
+        //
+        // Deriving the window from what was parsed is what keeps it both in bounds and correct.
+        // Taking a fixed `QUOTE_HEADER_LENGTH + body_length` prefix, as this did before, indexed the
+        // input without ever checking its length - so a short input panicked instead of returning an
+        // error - and for a v5 quote it started the body at the wrong offset, excluding the six-byte
+        // body descriptor and including six bytes of the signature section in its place, which meant
+        // the wrong bytes were passed to signature verification.
+        let signed_data_length = original_input
+            .len()
+            .checked_sub(input.len())
+            .ok_or(QuoteParseError::InputTooShort)?;
+        let expected_signed_data_length = QUOTE_HEADER_LENGTH
+            + match (header.version, &body.tdx_version) {
+                (4, _) => V4_QUOTE_BODY_LENGTH,
+                (5, TDXVersion::One) => V5_BODY_DESCRIPTOR_LENGTH + V4_QUOTE_BODY_LENGTH,
+                (5, TDXVersion::OnePointFive) => V5_BODY_DESCRIPTOR_LENGTH + V5_QUOTE_BODY_LENGTH,
+                _ => return Err(QuoteParseError::UnknownQuoteVersion),
+            };
+        if signed_data_length != expected_signed_data_length {
+            return Err(QuoteParseError::Parse);
+        }
+        let signed_data = original_input
+            .get(..signed_data_length)
+            .ok_or(QuoteParseError::InputTooShort)?;
 
         // Signature
         let (input, _signature_section_length) = le_i32(input)?;
@@ -113,33 +166,66 @@ impl Quote {
     }
 
     /// Returns the report data
+    ///
+    /// Only meaningful once [`Quote::verify`] (or [`Quote::verify_with_pck`] against a PCK you have
+    /// established belongs to Intel) has succeeded for this quote.
     pub fn report_input_data(&self) -> [u8; 64] {
         self.body.reportdata
     }
 
     /// Returns the build-time measurement register
+    ///
+    /// Only meaningful once [`Quote::verify`] has succeeded for this quote; on an unverified quote
+    /// every measurement is simply whatever the sender chose to put there.
     pub fn mrtd(&self) -> [u8; 48] {
         self.body.mrtd
     }
 
     /// Returns run-time measurement register 0
+    ///
+    /// See [`Quote::mrtd`] for why this must not be trusted before verification.
     pub fn rtmr0(&self) -> [u8; 48] {
         self.body.rtmr0
     }
 
     /// Returns run-time measurement register 1
+    ///
+    /// See [`Quote::mrtd`] for why this must not be trusted before verification.
     pub fn rtmr1(&self) -> [u8; 48] {
         self.body.rtmr1
     }
 
     /// Returns run-time measurement register 2
+    ///
+    /// See [`Quote::mrtd`] for why this must not be trusted before verification.
     pub fn rtmr2(&self) -> [u8; 48] {
         self.body.rtmr2
     }
 
     /// Returns run-time measurement register 3
+    ///
+    /// See [`Quote::mrtd`] for why this must not be trusted before verification.
     pub fn rtmr3(&self) -> [u8; 48] {
         self.body.rtmr3
+    }
+
+    /// Whether both ECDSA signatures in this quote are in the canonical low-`s` form
+    ///
+    /// ECDSA signatures are malleable: negating `s` yields a different byte string that verifies
+    /// against the same message and key. Neither this crate nor Intel's own verification library
+    /// rejects the high-`s` form, so quotes in the wild may legitimately use either. That matters if
+    /// a caller treats the quote bytes (or a hash of them) as a unique identifier - for replay
+    /// protection or de-duplication, say - because the same quote can then be presented under two
+    /// distinct identities. Callers doing that should either key off
+    /// [`Quote::report_input_data`] instead, or require this to be true.
+    pub fn signatures_are_canonical(&self) -> bool {
+        if self.signature.normalize_s().is_some() {
+            return false;
+        }
+        match self.qe_report_certification_data() {
+            Some(data) => data.signature.normalize_s().is_none(),
+            None => true,
+        }
     }
 
     /// Returns the QeReportCertificationData if present
@@ -184,10 +270,29 @@ impl Quote {
     }
 
     /// Verify the quote using the embedded PCK certificate chain, and if successful return the PCK
+    ///
+    /// This does not check whether any certificate in the chain has expired - see
+    /// [`Quote::verify_at`] - nor whether it has been revoked or the platform's TCB is current. See
+    /// the [`pck`] module documentation for what is and is not established here.
     #[cfg(feature = "pck")]
     pub fn verify(&self) -> Result<VerifyingKey, QuoteVerificationError> {
         let cert_chain = self.pck_cert_chain()?;
         let pck = pck::verify_pck_certificate_chain_pem(cert_chain)?;
+
+        self.verify_with_pck(&pck)?;
+        Ok(pck)
+    }
+
+    /// Same as [`Quote::verify`], but additionally requires every certificate in the PCK chain to be
+    /// within its validity period at `unix_time_seconds` (seconds since the Unix epoch, UTC).
+    ///
+    /// Prefer this wherever the current time is available. An expired PCK certificate means the
+    /// platform's provisioning is no longer vouched for by Intel, and this crate cannot read a clock
+    /// on its own because it is `no_std`.
+    #[cfg(feature = "pck")]
+    pub fn verify_at(&self, unix_time_seconds: u64) -> Result<VerifyingKey, QuoteVerificationError> {
+        let cert_chain = self.pck_cert_chain()?;
+        let pck = pck::verify_pck_certificate_chain_pem_at(cert_chain, unix_time_seconds)?;
 
         self.verify_with_pck(&pck)?;
         Ok(pck)
@@ -379,12 +484,45 @@ pub struct QeReportCertificationData {
 }
 
 impl QeReportCertificationData {
+    /// The `mr_enclave` measurement of the quoting enclave that produced this report
+    ///
+    /// Compare this against the value published in Intel's QE Identity to establish that the report
+    /// was produced by Intel's quoting enclave and not by some other enclave on the same platform.
+    /// That comparison needs data this crate does not fetch, so it is left to the caller.
+    pub fn qe_mr_enclave(&self) -> [u8; 32] {
+        let mut output = [0u8; 32];
+        output.copy_from_slice(
+            &self.qe_report[QE_REPORT_MR_ENCLAVE_OFFSET..QE_REPORT_MR_ENCLAVE_OFFSET + 32],
+        );
+        output
+    }
+
+    /// The `mr_signer` measurement of the quoting enclave that produced this report
+    ///
+    /// See [`Self::qe_mr_enclave`] for why the comparison is the caller's responsibility.
+    pub fn qe_mr_signer(&self) -> [u8; 32] {
+        let mut output = [0u8; 32];
+        output.copy_from_slice(
+            &self.qe_report[QE_REPORT_MR_SIGNER_OFFSET..QE_REPORT_MR_SIGNER_OFFSET + 32],
+        );
+        output
+    }
+
+    /// The SGX attribute flags of the quoting enclave that produced this report
+    pub fn qe_attribute_flags(&self) -> u64 {
+        let mut flags = [0u8; 8];
+        flags.copy_from_slice(
+            &self.qe_report[QE_REPORT_ATTRIBUTES_OFFSET..QE_REPORT_ATTRIBUTES_OFFSET + 8],
+        );
+        u64::from_le_bytes(flags)
+    }
+
     /// Parse QeReportCertificationData from given input, checking the hash contains the given
     /// attestation key
     fn new(input: Vec<u8>, attestation_key: Vec<u8>) -> Result<Self, QuoteParseError> {
         let (input, qe_report) = take384(&input)?;
         // The last part of the qe_report is the hash of the attestation key and authentication
-        // data, followed by 32 null bytes (which we ignore)
+        // data, followed by 32 null bytes
         let expected_hash = &qe_report[384 - 64..384 - 32];
 
         let (input, signature) = take64(input)?;
@@ -410,6 +548,24 @@ impl QeReportCertificationData {
         };
         if hash[..] != *expected_hash {
             return Err(QuoteParseError::AttestationKeyDoesNotMatch);
+        }
+
+        // The specification fixes the upper half of the QE report's `report_data` at zero. Requiring
+        // that leaves no unconstrained bytes inside the PCK-signed report: without the check, 32 bytes
+        // of the signed structure can be chosen freely, which lets one PCK signature be reused to
+        // carry attacker-chosen content.
+        if qe_report[QE_REPORT_DATA_OFFSET + 32..] != [0u8; 32] {
+            return Err(QuoteParseError::MalformedQeReportData);
+        }
+
+        // A debug enclave's memory is readable and writable by the host, so its report says nothing
+        // about what code actually ran. Production quoting enclaves never have this bit set.
+        let mut flags = [0u8; 8];
+        flags.copy_from_slice(
+            &qe_report[QE_REPORT_ATTRIBUTES_OFFSET..QE_REPORT_ATTRIBUTES_OFFSET + 8],
+        );
+        if u64::from_le_bytes(flags) & SGX_ATTRIBUTE_FLAG_DEBUG != 0 {
+            return Err(QuoteParseError::DebugQuotingEnclave);
         }
 
         Ok(Self {
